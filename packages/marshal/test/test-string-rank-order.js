@@ -1,7 +1,7 @@
-import { test } from './prepare-test-env-ava.js';
+import test from '@endo/ses-ava/prepare-endo.js';
 
 import { compareRank } from '../src/rankOrder.js';
-import { encodePassable } from './test-encodePassable.js';
+import { encodePassable } from './encodePassable-for-testing.js';
 
 /**
  * Essentially a ponyfill for Array.prototype.toSorted, for use before

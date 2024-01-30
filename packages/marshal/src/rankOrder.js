@@ -8,7 +8,7 @@ import {
 
 /**
  * @import {Passable, PassStyle} from '@endo/pass-style'
- * @import {FullCompare, RankCompare, RankCover} from './types.js'
+ * @import {FullCompare, RankCompare, RankCover, RankComparison} from './types.js'
  */
 
 const { entries, fromEntries, setPrototypeOf, is } = Object;
