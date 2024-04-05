@@ -10,7 +10,6 @@ import {
   ReferenceError,
   TypeError,
   Map,
-  Set,
   arrayJoin,
   arrayMap,
   arrayPush,
@@ -19,15 +18,12 @@ import {
   mapGet,
   mapHas,
   mapSet,
-  setAdd,
   values,
   weakmapGet,
 } from './commons.js';
 import { assert } from './error/assert.js';
 
 const { Fail, details: d, quote: q } = assert;
-
-const noop = () => {};
 
 // `makeAlias` constructs compartment specifier tuples for the `aliases`
 // private field of compartments.
@@ -83,17 +79,20 @@ const loadRecord = (
 
   // Enqueue jobs to load this module's shallow dependencies.
   for (const fullSpecifier of values(resolvedImports)) {
-    // TODO: error handling
-    // Behold: recursion.
-    // eslint-disable-next-line no-use-before-define
-    memoizedLoadWithErrorAnnotation(
-      compartmentPrivateFields,
-      moduleAliases,
-      compartment,
-      fullSpecifier,
-      moduleLoads,
-      errors,
-    );
+    try {
+      // Behold: recursion.
+      // eslint-disable-next-line no-use-before-define
+      memoizedLoadWithErrorAnnotation(
+        compartmentPrivateFields,
+        moduleAliases,
+        compartment,
+        fullSpecifier,
+        moduleLoads,
+        errors,
+      );
+    } catch (error) {
+      arrayPush(errors, error);
+    }
   }
 
   // Memoize.
@@ -303,15 +302,18 @@ export const loadSync = (
   /** @type {Array<Error>} */
   const errors = [];
 
-  // TODO: error handling - capture error and push to errors
-  memoizedLoadWithErrorAnnotation(
-    compartmentPrivateFields,
-    moduleAliases,
-    compartment,
-    moduleSpecifier,
-    moduleLoads,
-    errors,
-  );
+  try {
+    memoizedLoadWithErrorAnnotation(
+      compartmentPrivateFields,
+      moduleAliases,
+      compartment,
+      moduleSpecifier,
+      moduleLoads,
+      errors,
+    );
+  } catch (error) {
+    arrayPush(errors, error);
+  }
  
   
   // Throw an aggregate error if there were any errors.
