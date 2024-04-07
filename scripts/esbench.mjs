@@ -316,9 +316,9 @@ const parseArgs = (argv, fail) => {
 };
 
 const main = async argv => {
-  const failArg = msg => {
+  const failArg = (msg, usage = USAGE.replace(/\n {3}.*/g, '')) => {
     process.exitCode = EX_USAGE;
-    throw makeSimpleError(`Error: ${msg}\n\n${USAGE}`);
+    throw makeSimpleError(`Error: ${msg}\n\n${usage}`);
   };
   const {
     help,
@@ -338,7 +338,7 @@ const main = async argv => {
     process.exitCode = EX_USAGE;
     return;
   } else if (Object.keys(snippets).length === 0) {
-    failArg('at least one snippet is required');
+    failArg('at least one snippet is required', USAGE);
   }
 
   // Assemble script source.
