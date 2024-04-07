@@ -582,10 +582,11 @@ const main = async argv => {
       for (let a = 1, b = Infinity, n = data.n; ; n = max(a, min(n, b))) {
         data.n = n;
         timer = makeTimer(code, data);
-        ({ duration, resolution: thisResolution } = await timer(fullArgs));
+        const firstData = await timer(fullArgs);
+        ({ duration } = firstData);
         // Ignore clock discontinuities that we can detect.
-        if (thisResolution <= 0 || duration < 0) continue;
-        resolution = min(resolution, thisResolution);
+        if (firstData.resolution <= 0 || duration < 0) continue;
+        resolution = min(resolution, firstData.resolution);
         if (duration < 10 * resolution) {
           a = n + 1;
           if (duration > 0) {
