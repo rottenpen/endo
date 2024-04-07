@@ -397,9 +397,7 @@ const main = async argv => {
     // Functions that we invoke directly.
     { print, Array, Function, RegExp },
     // Bindings that should have been keywords.
-    undefined = void 0,
-    Infinity = 1 / 0,
-    NaN = Infinity % 1,
+    [undefined, Infinity, NaN] = [void 0, 1 / 0, +'NaN'],
   ) => {
     // An object with no extractable properties.
     const dummy = Object.freeze(Object.create(null));
