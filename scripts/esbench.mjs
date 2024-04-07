@@ -348,11 +348,50 @@ const main = async argv => {
     args,
     scalingArg,
     setup: setups.join(';\n'),
-    snippetEntries: Object.entries(snippets),
+    snippets,
     r: randomBytes(16).toString('hex'),
   };
+  // Create a dedent suitable for both producing the script and in the script
+  // itself by using identical freed methods.
+  // Note that the nested scope here warrants dedenting `dedent` itself.
+  const dedent = (() => {
+    const { call } = Function.prototype;
+    const join = call.bind(Array.prototype.join);
+    const push = call.bind(Array.prototype.push);
+    const exec = call.bind(RegExp.prototype.exec);
+    const replace = call.bind(String.prototype.replace);
+    const split = call.bind(String.prototype.split);
+    const dedent = (strings, ...subs) => {
+      const parts = [];
+      for (let rIndent, i = 0; i < strings.length; i += 1) {
+        if (i > 0) push(parts, '' + subs[i - 1]);
+
+        // Split each string into lines, immediately consuming the first unless it
+        // might include initial indentation in strings[0].
+        const lines = split(strings[i], '\n');
+        const start = i === 0 && lines[0] !== '' ? 0 : 1;
+        if (start !== 0) push(parts, lines[0]);
+
+        for (let j = start; j < lines.length; j += 1) {
+          // Capture indentation before non-whitespace or the end of strings[i].
+          const line = lines[j];
+          const more = j < lines.length - 1;
+          if (!rIndent) {
+            const m = exec(/\S/, line) || (!more && { index: line.length });
+            if (m) rIndent = RegExp(replace('^\\s{1,n}', 'n', m.index));
+          }
+
+          // Skip an isolated initial line feed in strings[0].
+          push(parts, i > 0 || j > start ? '\n' : '');
+          push(parts, rIndent ? replace(line, rIndent, '') : line);
+        }
+      }
+      return join(parts, '');
+    };
+    return dedent;
+  })();
   const scriptAsFn = async (
-    { awaitSnippets, budget, args, scalingArg, setup, snippetEntries, r },
+    { awaitSnippets, budget, args, scalingArg, setup, snippets, r },
     // Capture functions and methods to be robust against post-init manipulation.
     // This is probably paranoid, but we *do* want to benchmark shims/polyfills/etc.
     // Functions that we invoke directly.
@@ -405,13 +444,7 @@ const main = async argv => {
       sort,
       unshift,
     } = freeMethods(Array);
-    const {
-      repeat,
-      replace,
-      split,
-      slice: stringSlice,
-      trimEnd,
-    } = freeMethods(String);
+    const { repeat, replace, split, slice: stringSlice } = freeMethods(String);
     const { exec } = freeMethods(RegExp);
 
     // prepended(arr, ...items) returns [...items, ...arr].
@@ -447,9 +480,6 @@ const main = async argv => {
         arr[i] = arr[j];
         arr[j] = v;
       });
-
-    // Configuration gets filled in by the outer scope.
-    // End of configuration.
 
     const nonScalingArgs = assignEntries(
       filter(entries(args), ([name, _arr]) => name !== scalingArg),
@@ -498,7 +528,7 @@ const main = async argv => {
       if (scalingArg !== undefined) push(ctorArgs, scalingArg);
       // Shadow `arguments` to avoid leaking infrastructure details.
       push(ctorArgs, '...arguments');
-      const body = trimEnd(dedent`
+      const body = dedent`
         const { now: ${v.now}, dummy: ${v.dummy} } =
           arguments[arguments.length - 1];
         arguments.length = 0;
@@ -518,11 +548,14 @@ const main = async argv => {
           }
         }
         const ${v.tF} = ${v.now}();
-        return { result, ${join(
-          map(entries(v), ([k, as]) => k + ': ' + as),
-          ', ',
-        )} };
-      `);
+        return {
+          result,
+          ${join(
+            map(entries(v), ([k, as]) => k + ': ' + as),
+            ',\n  ',
+          )},
+        };
+      `;
       push(ctorArgs, body);
       const inner = construct(ctor, ctorArgs);
       // The final item in `args` must supply the `now` function used
@@ -588,6 +621,7 @@ const main = async argv => {
     // For each non-final scaling value and each combination of non-scaling
     // arguments, collect samples from the snippets in random order.
     const argCombos = ifEmpty(crossJoin(values(nonScalingArgs)), [[]]);
+    const snippetEntries = entries(snippets);
     const snippetOrder = assignEntries(
       map(snippetEntries, ([label], i) => [label, i]),
     );
@@ -629,48 +663,8 @@ const main = async argv => {
       if (C <= 0) break;
     }
   };
-  // Create a dedent suitable for both here and in the script
-  // by using identical free methods.
-  // Note that the nested scope here calls for dedenting `dedent` itself.
-  const dedent = (() => {
-    const { call } = Function.prototype;
-    const join = call.bind(Array.prototype.join);
-    const push = call.bind(Array.prototype.push);
-    const exec = call.bind(RegExp.prototype.exec);
-    const replace = call.bind(String.prototype.replace);
-    const split = call.bind(String.prototype.split);
-    const dedent = (strings, ...subs) => {
-      const parts = [];
-      for (let rIndent, i = 0; i < strings.length; i += 1) {
-        if (i > 0) push(parts, '' + subs[i - 1]);
-
-        // Split each string into lines, immediately consuming the first unless it
-        // might include initial indentation in strings[0].
-        const lines = split(strings[i], '\n');
-        const start = i === 0 && lines[0] !== '' ? 0 : 1;
-        if (start !== 0) push(parts, lines[0]);
-
-        for (let j = start; j < lines.length; j += 1) {
-          // Capture indentation before non-whitespace or the end of strings[i].
-          const line = lines[j];
-          const more = j < lines.length - 1;
-          if (!rIndent) {
-            const m = exec(/\S/, line) || (!more && { index: line.length });
-            if (m) rIndent = RegExp(replace('^\\s{1,n}', 'n', m.index));
-          }
-
-          // Skip an isolated initial line feed in strings[0].
-          push(parts, i > 0 || j > start ? '\n' : '');
-          push(parts, rIndent ? replace(line, rIndent, '') : line);
-        }
-      }
-      return join(parts, '');
-    };
-    return dedent;
-  })();
   const scriptFnSource = mustReplace(dedent(['  ' + scriptAsFn.toString()]), [
     [/=>\s*\{/, s => `${s}\n// --init\n${inits.join(';\n')};\n`],
-    // [/\/\/ Configuration.*\n/, s => `${s}${declarations.join('\n')}\n`],
     [
       /const dedent = [^;]*/,
       () => `const dedent = ${dedent(['  ' + dedent.toString()])}`,
