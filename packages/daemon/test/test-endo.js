@@ -1257,3 +1257,37 @@ test('locate remote value', async t => {
   const parsedGreetingsLocator = parseLocator(greetingsLocator);
   t.is(parsedGreetingsLocator.formulaType, 'remote');
 });
+
+test.skip('invite, accept, and send mail', async t => {
+  const { locator: locatorA, cancelled: cancelledA } = await prepareLocator(t);
+  const { locator: locatorB, cancelled: cancelledB } = await prepareLocator(t);
+  const hostA = await makeHostWithTestNetwork(locatorA, cancelledA);
+  const hostB = await makeHostWithTestNetwork(locatorB, cancelledB);
+
+  t.log(await E(hostA).getPeerInfo());
+  t.log(await E(hostB).getPeerInfo());
+
+  const invitation = await E(hostA).invite('bob');
+  const invitationLocator = await E(invitation).locate();
+  t.log(invitationLocator);
+  await E(hostB).accept(invitationLocator, 'alice');
+
+  // create value to share
+  await E(hostA).evaluate('MAIN', '"hello, world!"', [], [], 'salutations');
+  await E(hostA).send('bob', ['Hello'], [], []);
+
+  {
+    const messages = await E(hostA).listMessages();
+    t.log(messages);
+  }
+  {
+    const messages = await E(hostB).listMessages();
+    t.log(messages);
+  }
+  //
+  // // insert in hostA out of band
+  // await E(hostA).write(['greetings'], hostBValueIdentifier);
+  //
+  // const hostAValue = await E(hostA).lookup('greetings');
+  // t.is(hostAValue, 'hello, world!');
+});

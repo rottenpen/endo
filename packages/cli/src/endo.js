@@ -447,6 +447,28 @@ export const main = async rawArgs => {
     });
 
   program
+    .command('invite <guest-name>')
+    .option(...commonOptions.as)
+    .action(async (guestName, cmd) => {
+      const { as: agentNames } = cmd.opts();
+      const { invite } = await import('./commands/invite.js');
+      return invite({ agentNames, guestName });
+    });
+
+  program
+    .command('accept <invitation>')
+    .option(...commonOptions.as)
+    .option(...commonOptions.name)
+    .action(async (invitationLocator, cmd) => {
+      const { as: agentNames, name: guestName } = cmd.opts();
+      if (guestName === undefined) {
+        throw 'Must accept invitation with name';
+      }
+      const { accept } = await import('./commands/accept.js');
+      return accept({ agentNames, guestName, invitationLocator });
+    });
+
+  program
     .command('cancel <name> [reason]')
     .option(...commonOptions.as)
     .description('cancel a value and its deps, recovering resources')
