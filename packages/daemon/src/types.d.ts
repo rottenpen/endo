@@ -452,10 +452,7 @@ export interface EndoReadable {
 }
 export type FarEndoReadable = FarRef<EndoReadable>;
 
-export interface EndoWorker {
-  terminate(): void;
-  whenTerminated(): Promise<void>;
-}
+export interface EndoWorker {}
 
 export type MakeHostOrGuestOptions = {
   agentName?: string;
@@ -559,7 +556,7 @@ export type KnownEndoInspectors = {
   [formulaType: string]: EndoInspector<string>;
 };
 
-export type FarEndoBootstrap = FarRef<{
+export type EndoBootstrap = {
   ping: () => Promise<string>;
   terminate: () => Promise<void>;
   host: () => Promise<EndoHost>;
@@ -567,7 +564,9 @@ export type FarEndoBootstrap = FarRef<{
   gateway: () => Promise<EndoGateway>;
   reviveNetworks: () => Promise<void>;
   addPeerInfo: (peerInfo: PeerInfo) => Promise<void>;
-}>;
+};
+
+export type FarEndoBootstrap = FarRef<EndoBootstrap>;
 
 export type CryptoPowers = {
   makeSha512: () => Sha512;
@@ -718,6 +717,37 @@ type FormulateNumberedHostParams = {
   networksDirectoryId: string;
 };
 
+export type Provide = <T extends string>(
+  id: string,
+  type?: T,
+) => Promise<
+  T extends 'endo'
+    ? EndoBootstrap
+    : T extends 'pet-store'
+    ? PetStore
+    : T extends 'peer'
+    ? EndoGateway
+    : T extends 'directory'
+    ? EndoDirectory
+    : T extends 'network'
+    ? EndoNetwork
+    : T extends 'host'
+    ? EndoHost
+    : T extends 'hub'
+    ? NameHub
+    : T extends 'readable-blob'
+    ? EndoReadable
+    : T extends 'worker'
+    ? EndoWorker
+    : T extends 'agent'
+    ? EndoAgent
+    : T extends 'guest'
+    ? EndoGuest
+    : T extends 'invitation'
+    ? Invitation
+    : unknown
+>;
+
 export interface DaemonCore {
   cancelValue: (id: string, reason: Error) => Promise<void>;
 
@@ -830,7 +860,7 @@ export interface DaemonCore {
 
   makeMailbox: MakeMailbox;
 
-  provide: (id: string) => Promise<unknown>;
+  provide: Provide;
 
   provideController: (id: string) => Controller;
 
