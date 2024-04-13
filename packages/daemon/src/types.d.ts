@@ -171,6 +171,7 @@ export type MakeCapletDeferredTaskParams = {
 type PeerFormula = {
   type: 'peer';
   networks: string;
+  node: string;
   addresses: Array<string>;
 };
 
@@ -474,6 +475,15 @@ export interface EndoPeer {
   provide: (id: string) => Promise<unknown>;
 }
 
+export interface EndoGreeter {
+  hello: (
+    remoteNodeKey: string,
+    remoteGateway: Promise<EndoGateway>,
+    cancel: (error: Error) => void,
+    cancelled: Promise<never>,
+  ) => Promise<EndoGateway>;
+}
+
 export interface EndoGateway {
   provide: (id: string) => Promise<unknown>;
 }
@@ -486,7 +496,7 @@ export interface PeerInfo {
 export interface EndoNetwork {
   supports: (network: string) => boolean;
   addresses: () => Array<string>;
-  connect: (address: string, farContext: FarContext) => EndoGateway;
+  connect: (address: string, farContext: FarContext) => Promise<EndoGreeter>;
 }
 
 export interface EndoAgent extends EndoDirectory {
@@ -546,6 +556,7 @@ export interface EndoHost extends EndoAgent {
     resultName?: string,
   ): Promise<unknown>;
   cancel(petName: string, reason: Error): Promise<void>;
+  greeter(): Promise<EndoGreeter>;
   gateway(): Promise<EndoGateway>;
   getPeerInfo(): Promise<PeerInfo>;
   addPeerInfo(peerInfo: PeerInfo): Promise<void>;
@@ -578,6 +589,7 @@ export type EndoBootstrap = {
   terminate: () => Promise<void>;
   host: () => Promise<EndoHost>;
   leastAuthority: () => Promise<EndoGuest>;
+  greeter: () => Promise<EndoGreeter>;
   gateway: () => Promise<EndoGateway>;
   reviveNetworks: () => Promise<void>;
   addPeerInfo: (peerInfo: PeerInfo) => Promise<void>;
@@ -846,6 +858,7 @@ export interface DaemonCore {
 
   formulatePeer: (
     networksId: string,
+    nodeId: string,
     addresses: Array<string>,
   ) => FormulateResult<EndoPeer>;
 
@@ -893,7 +906,7 @@ export interface DaemonCore {
 
 export interface DaemonCoreExternal {
   formulateEndoBootstrap: DaemonCore['formulateEndoBootstrap'];
-  nodeIdentifier: string;
+  nodeId: string;
   provide: DaemonCore['provide'];
 }
 
@@ -989,3 +1002,29 @@ export type BidirectionalMultimap<K, V> = {
    */
   getAllFor(key: K): V[];
 };
+
+export interface RemoteControl {
+  accept(
+    remoteGateway: Promise<EndoGateway>,
+    cancel: (error: Error) => void,
+    cancelled: Promise<never>,
+  ): void;
+  connect(
+    getRemoteGateway: () => Promise<EndoGateway>,
+    cancel: (error: Error) => void,
+    cancelled: Promise<never>,
+  ): Promise<EndoGateway>;
+}
+
+export interface RemoteControlState {
+  accept(
+    remoteGateway: Promise<EndoGateway>,
+    cancel: (error: Error) => void,
+    cancelled: Promise<never>,
+  ): RemoteControlState;
+  connect(
+    getRemoteGateway: () => Promise<EndoGateway>,
+    cancel: (error: Error) => void,
+    cancelled: Promise<never>,
+  ): { state: RemoteControlState; remoteGateway: Promise<EndoGateway> };
+}

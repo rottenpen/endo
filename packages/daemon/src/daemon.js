@@ -122,12 +122,8 @@ const makeDaemonCore = async (
   const formulaGraphJobs = makeSerialJobs();
   // This is the id of the node that is hosting the values.
   // This will likely get replaced with a public key in the future.
-  const ownNodeIdentifier = deriveId(
-    'node',
-    rootEntropy,
-    cryptoPowers.makeSha512(),
-  );
-  console.log('Node', ownNodeIdentifier);
+  const localNodeId = deriveId('node', rootEntropy, cryptoPowers.makeSha512());
+  console.log('Node', localNodeId);
 
   const knownPeersFormulaNumber = deriveId(
     'peers',
@@ -136,7 +132,7 @@ const makeDaemonCore = async (
   );
   const knownPeersId = formatId({
     number: knownPeersFormulaNumber,
-    node: ownNodeIdentifier,
+    node: localNodeId,
   });
   await persistencePowers.writeFormula(knownPeersFormulaNumber, {
     type: 'known-peers-store',
@@ -150,7 +146,7 @@ const makeDaemonCore = async (
   );
   const leastAuthorityId = formatId({
     number: leastAuthorityFormulaNumber,
-    node: ownNodeIdentifier,
+    node: localNodeId,
   });
   await persistencePowers.writeFormula(leastAuthorityFormulaNumber, {
     type: 'least-authority',
@@ -164,7 +160,7 @@ const makeDaemonCore = async (
   );
   const mainWorkerId = formatId({
     number: mainWorkerFormulaNumber,
-    node: ownNodeIdentifier,
+    node: localNodeId,
   });
   await persistencePowers.writeFormula(mainWorkerFormulaNumber, {
     type: 'worker',
@@ -188,7 +184,7 @@ const makeDaemonCore = async (
         );
         const id = formatId({
           number: formulaNumber,
-          node: ownNodeIdentifier,
+          node: localNodeId,
         });
         await persistencePowers.writeFormula(formulaNumber, formula);
         return [specialName, id];
@@ -219,6 +215,199 @@ const makeDaemonCore = async (
   /** @type {WeakMap<{}, string>} */
   const agentIdForHandle = new WeakMap();
 
+  /** @type {Map<string, import('./types.js').RemoteControl>} */
+  const remoteControls = new Map();
+
+  /** @param {string} remoteNodeId */
+  const makeRemoteControl = remoteNodeId => {
+    // In this state, we have received a remoteGateway from an ingress
+    // connection (and provided our local gateway to them.)
+    // We do not have a pending outbound connection attempt.
+    /**
+     * @type {(
+     *   remoteGateway: Promise<import('./types.js').EndoGateway>,
+     *   cancel: (error: Error) => void,
+     *   cancelled: Promise<never>,
+      ) => import('./types.js').RemoteControlState} */
+    const accepted = (remoteGateway, cancel, cancelled) => {
+      return {
+        accept(proposedRemoteGateway, proposedCancel, proposedCancelled) {
+          // And we receive an inbound connection.
+          // There are two possibilities:
+          // The sender raced multiple outbound connections and this connection
+          // lost the race.
+          // Or, the sender restarted but left a prior connection half-open.
+          // We consider the race to be the common consideration and that
+          // replacing peers after establishing a connection would be far to
+          // disruptive.
+          // TODO: For the case where we leave a peer wedged half-open, we
+          // will need health checks.
+          proposedCancel(new Error('Already accepted a connection.'));
+          return accepted(remoteGateway, cancel, cancelled);
+        },
+        connect(_getProposedRemoteGateway, proposedCancel, proposedCancelled) {
+          // Use the gateway we already have.
+          // Bind the fates of the current peer incarnation and the inbound
+          // connection.
+          cancelled.catch(proposedCancel);
+          proposedCancelled.catch(cancel);
+          return {
+            state: accepted(remoteGateway, proposedCancel, proposedCancelled),
+            remoteGateway,
+          };
+        },
+      };
+    };
+
+    // We have an active outbound connection.
+    /**
+     * @type {(
+     *   remoteGateway: Promise<import('./types.js').EndoGateway>,
+     *   cancel: (error: Error) => void,
+     *   cancelled: Promise<never>,
+      ) => import('./types.js').RemoteControlState} */
+    const connected =
+      remoteNodeId > localNodeId
+        ? (remoteGateway, cancel, cancelled) => {
+            // We are biased toward preserving our own outbound connection.
+            return {
+              accept(
+                _proposedRemoteGateway,
+                proposedCancel,
+                _proposedCancelled,
+              ) {
+                // We receive an inbound connection.
+                // We favor our outbound connection,
+                // so cancel the inbound.
+                proposedCancel(
+                  new Error(
+                    'Connection refused: already connected (crossed hellos, connect bias)',
+                  ),
+                );
+                return connected(remoteGateway, cancel, cancelled);
+              },
+              connect(
+                _getProposedRemoteGateway,
+                proposedCancel,
+                proposedCancelled,
+              ) {
+                // The corresponding peer is incarnated.
+                // Bind the fates of this incarnation with the existing connection.
+                proposedCancelled.catch(cancel);
+                cancelled.catch(proposedCancel);
+                return {
+                  state: connected(
+                    remoteGateway,
+                    proposedCancel,
+                    proposedCancelled,
+                  ),
+                  remoteGateway,
+                };
+              },
+            };
+          }
+        : (remoteGateway, cancel, cancelled) => {
+            // We are biased toward preserving inbound connections.
+            return {
+              accept(proposedRemoteGateway, proposedCancel, proposedCancelled) {
+                // We receive an inbound connection.
+                // Ditch our outbound connection.
+                cancel(
+                  new Error(
+                    'Connection abandoned: accepted new connection (crossed hellos, accept bias)',
+                  ),
+                );
+                // Arrange to retrun to the initial state if we lose this new
+                // connection.
+                proposedCancelled.catch(() => {
+                  state = start();
+                });
+                return accepted(
+                  proposedRemoteGateway,
+                  proposedCancel,
+                  proposedCancelled,
+                );
+              },
+              connect(
+                _getProposedRemoteGateway,
+                proposedCancel,
+                proposedCancelled,
+              ) {
+                // We incarnate the corresponding peer.
+                // Bind the fates of the new peer with the existing connection.
+                proposedCancelled.catch(cancel);
+                cancelled.catch(proposedCancel);
+                return {
+                  state: connected(
+                    remoteGateway,
+                    proposedCancel,
+                    proposedCancelled,
+                  ),
+                  remoteGateway,
+                };
+              },
+            };
+          };
+
+    /** @type {() => import('./types.js').RemoteControlState} */
+    const start = () => {
+      return {
+        accept: (proposedRemoteGateway, cancel, cancelled) => {
+          cancelled.catch(() => {
+            state = start();
+          });
+          return accepted(proposedRemoteGateway, cancel, cancelled);
+        },
+        connect: (getRemoteGateway, cancel, cancelled) => {
+          cancelled.catch(() => {
+            state = start();
+          });
+          const remoteGateway = getRemoteGateway();
+          return {
+            state: connected(remoteGateway, cancel, cancelled),
+            remoteGateway,
+          };
+        },
+      };
+    };
+
+    let state = start();
+    /**
+     * @param {Promise<import('./types.js').EndoGateway>} proposedRemoteGateway
+     * @param {(error: Error) => void} cancel
+     * @param {Promise<never>} cancelled
+     */
+    const accept = (proposedRemoteGateway, cancel, cancelled) => {
+      state = state.accept(proposedRemoteGateway, cancel, cancelled);
+    };
+    /**
+     * @param {() => Promise<import('./types.js').EndoGateway>} getRemoteGateway
+     * @param {(error: Error) => void} cancel
+     * @param {Promise<never>} cancelled
+     */
+    const connect = (getRemoteGateway, cancel, cancelled) => {
+      const { state: nextState, remoteGateway } = state.connect(
+        getRemoteGateway,
+        cancel,
+        cancelled,
+      );
+      state = nextState;
+      return remoteGateway;
+    };
+
+    return { accept, connect };
+  };
+
+  /** @param {string} remoteNodeId */
+  const provideRemoteControl = remoteNodeId => {
+    let remoteControl = remoteControls.get(remoteNodeId);
+    if (remoteControl === undefined) {
+      remoteControl = makeRemoteControl(remoteNodeId);
+      remoteControls.set(remoteNodeId, remoteControl);
+    }
+    return remoteControl;
+  };
+
   /** @param {string} id */
   const getFormulaForId = async id => {
     await null;
@@ -235,7 +424,7 @@ const makeDaemonCore = async (
 
   /** @param {string} id */
   const getTypeForId = async id => {
-    if (parseId(id).node !== ownNodeIdentifier) {
+    if (parseId(id).node !== localNodeId) {
       return 'remote';
     }
     const { type } = await getFormulaForId(id);
@@ -259,6 +448,38 @@ const makeDaemonCore = async (
       // eslint-disable-next-line no-use-before-define
       provideController(id).value
     );
+
+  // Gateway is equivalent to E's "nonce locator". It provides a value for
+  // a formula identifier to a remote client.
+  const localGateway = Far('Gateway', {
+    /** @param {string} requestedId */
+    provide: async requestedId => {
+      const { node } = parseId(requestedId);
+      if (node !== localNodeId) {
+        throw new Error(
+          `Gateway can only provide local values. Got request for node ${q(
+            node,
+          )}`,
+        );
+      }
+      return provide(requestedId);
+    },
+  });
+
+  /** @type {import('./types.js').EndoGreeter} */
+  const localGreeter = Far('Greeter', {
+    /**
+     * @param {string} remoteNodeId
+     * @param {Promise<import('./types.js').EndoGateway>} remoteGateway
+     * @param {(error: Error) => void} cancel
+     * @param {Promise<never>} cancelled
+     */
+    hello: async (remoteNodeId, remoteGateway, cancel, cancelled) => {
+      const remoteControl = provideRemoteControl(remoteNodeId);
+      remoteControl.accept(remoteGateway, cancel, cancelled);
+      return localGateway;
+    },
+  });
 
   /**
    * @param {string} workerId512
@@ -517,22 +738,6 @@ const makeDaemonCore = async (
       return handle;
     },
     endo: async ({ host: hostId, networks: networksId, peers: peersId }) => {
-      // Gateway is equivalent to E's "nonce locator". It provides a value for
-      // a formula identifier to a remote client.
-      const gateway = Far('Gateway', {
-        /** @param {string} requestedId */
-        provide: async requestedId => {
-          const { node } = parseId(requestedId);
-          if (node !== ownNodeIdentifier) {
-            throw new Error(
-              `Gateway can only provide local values. Got request for node ${q(
-                node,
-              )}`,
-            );
-          }
-          return provide(requestedId);
-        },
-      });
       /** @type {import('./types.js').FarEndoBootstrap} */
       const endoBootstrap = Far('Endo private facet', {
         // TODO for user named
@@ -542,7 +747,9 @@ const makeDaemonCore = async (
         },
         host: () => provide(hostId, 'host'),
         leastAuthority: () => provide(leastAuthorityId, 'guest'),
-        gateway: async () => gateway,
+        greeter: async () => localGreeter,
+        gateway: async () => localGateway,
+        nodeId: () => localNodeId,
         reviveNetworks: async () => {
           const networksDirectory = await provide(networksId, 'directory');
           const networkIds = await networksDirectory.listIdentifiers();
@@ -550,24 +757,22 @@ const makeDaemonCore = async (
         },
         addPeerInfo: async peerInfo => {
           const knownPeers = await provide(peersId, 'pet-store');
-          const { node: nodeIdentifier, addresses } = peerInfo;
-          if (knownPeers.has(nodeIdentifier)) {
+          const { node: nodeId, addresses } = peerInfo;
+          if (knownPeers.has(nodeId)) {
             // We already have this peer.
             // TODO: merge connection info
             return;
           }
           const { id: peerId } =
             // eslint-disable-next-line no-use-before-define
-            await formulatePeer(networksId, addresses);
-          await knownPeers.write(nodeIdentifier, peerId);
+            await formulatePeer(networksId, nodeId, addresses);
+          await knownPeers.write(nodeId, peerId);
         },
       });
       return endoBootstrap;
     },
     'loopback-network': () =>
-      makeLoopbackNetwork({
-        provide,
-      }),
+      makeLoopbackNetwork(Promise.resolve(localGreeter)),
     'least-authority': () => {
       const disallowedFn = async () => {
         throw new Error('not allowed');
@@ -627,10 +832,13 @@ const makeDaemonCore = async (
         petStoreId,
         context,
       }),
-    peer: ({ networks: networksId, addresses: addressesId }, context) =>
+    peer: (
+      { networks: networksId, node: nodeId, addresses: addressesId },
+      context,
+    ) =>
       // Behold, forward reference:
       // eslint-disable-next-line no-use-before-define
-      makePeer(networksId, addressesId, context),
+      makePeer(networksId, nodeId, addressesId, context),
     invitation: (
       { hostAgent: hostAgentId, hostHandle: hostHandleId, guestName },
       _context,
@@ -663,7 +871,7 @@ const makeDaemonCore = async (
    */
   const evaluateFormulaForId = async (id, context) => {
     const { number: formulaNumber, node: formulaNode } = parseId(id);
-    const isRemote = formulaNode !== ownNodeIdentifier;
+    const isRemote = formulaNode !== localNodeId;
     if (isRemote) {
       // eslint-disable-next-line no-use-before-define
       const peerId = await getPeerIdForNodeIdentifier(formulaNode);
@@ -682,7 +890,7 @@ const makeDaemonCore = async (
   const formulate = async (formulaNumber, formula) => {
     const id = formatId({
       number: formulaNumber,
-      node: ownNodeIdentifier,
+      node: localNodeId,
     });
 
     formulaForId.has(id) && assert.Fail`Formula already exists for id ${id}`;
@@ -759,19 +967,17 @@ const makeDaemonCore = async (
   };
 
   /**
-   * @param {string} nodeIdentifier
+   * @param {string} nodeId
    * @returns {Promise<string>}
    */
-  const getPeerIdForNodeIdentifier = async nodeIdentifier => {
-    if (nodeIdentifier === ownNodeIdentifier) {
+  const getPeerIdForNodeIdentifier = async nodeId => {
+    if (nodeId === localNodeId) {
       throw new Error(`Cannot get peer formula identifier for self`);
     }
     const knownPeers = await provide(knownPeersId, 'pet-store');
-    const peerId = knownPeers.identifyLocal(nodeIdentifier);
+    const peerId = knownPeers.identifyLocal(nodeId);
     if (peerId === undefined) {
-      throw new Error(
-        `No peer found for node identifier ${q(nodeIdentifier)}.`,
-      );
+      throw new Error(`No peer found for node identifier ${q(nodeId)}.`);
     }
     return peerId;
   };
@@ -796,7 +1002,7 @@ const makeDaemonCore = async (
         await deferredTasks.execute({
           readableBlobId: formatId({
             number: values.formulaNumber,
-            node: ownNodeIdentifier,
+            node: localNodeId,
           }),
         });
 
@@ -831,7 +1037,7 @@ const makeDaemonCore = async (
       const invitationNumber = await randomHex512();
       const invitationId = formatId({
         number: invitationNumber,
-        node: ownNodeIdentifier,
+        node: localNodeId,
       });
       await deferredTasks.execute({
         invitationId,
@@ -874,7 +1080,7 @@ const makeDaemonCore = async (
     await persistencePowers.writeFormula(formulaNumber, formula);
     const id = formatId({
       number: formulaNumber,
-      node: ownNodeIdentifier,
+      node: localNodeId,
     });
     formulaForId.set(id, formula);
     return id;
@@ -944,7 +1150,7 @@ const makeDaemonCore = async (
         await deferredTasks.execute({
           workerId: formatId({
             number: formulaNumber,
-            node: ownNodeIdentifier,
+            node: localNodeId,
           }),
         });
 
@@ -965,7 +1171,7 @@ const makeDaemonCore = async (
     const hostFormulaNumber = await randomHex512();
     const hostId = formatId({
       number: hostFormulaNumber,
-      node: ownNodeIdentifier,
+      node: localNodeId,
     });
 
     const handleId = await formulateNumberedHandle(
@@ -1036,7 +1242,7 @@ const makeDaemonCore = async (
     const guestFormulaNumber = await randomHex512();
     const guestId = formatId({
       number: guestFormulaNumber,
-      node: ownNodeIdentifier,
+      node: localNodeId,
     });
     const handleId = await formulateNumberedHandle(
       await randomHex512(),
@@ -1119,7 +1325,7 @@ const makeDaemonCore = async (
         const ownFormulaNumber = await randomHex512();
         const ownId = formatId({
           number: ownFormulaNumber,
-          node: ownNodeIdentifier,
+          node: localNodeId,
         });
 
         const identifiers = harden({
@@ -1233,7 +1439,7 @@ const makeDaemonCore = async (
       ),
       capletId: formatId({
         number: ownFormulaNumber,
-        node: ownNodeIdentifier,
+        node: localNodeId,
       }),
       capletFormulaNumber: ownFormulaNumber,
       workerId: await provideWorkerId(specifiedWorkerId),
@@ -1318,7 +1524,7 @@ const makeDaemonCore = async (
   };
 
   /** @type {import('./types.js').DaemonCore['formulatePeer']} */
-  const formulatePeer = async (networksDirectoryId, addresses) => {
+  const formulatePeer = async (networksDirectoryId, nodeId, addresses) => {
     const formulaNumber = await randomHex512();
     // TODO: validate addresses
     // TODO: mutable state like addresses should not be stored in formula
@@ -1326,6 +1532,7 @@ const makeDaemonCore = async (
     const formula = {
       type: 'peer',
       networks: networksDirectoryId,
+      node: nodeId,
       addresses,
     };
     return /** @type {import('./types').FormulateResult<import('./types').EndoPeer>} */ (
@@ -1360,7 +1567,7 @@ const makeDaemonCore = async (
       const formulaNumber = await (specifiedFormulaNumber ?? randomHex512());
       const endoId = formatId({
         number: formulaNumber,
-        node: ownNodeIdentifier,
+        node: localNodeId,
       });
 
       const { id: defaultHostWorkerId } = await formulateNumberedWorker(
@@ -1426,34 +1633,45 @@ const makeDaemonCore = async (
 
   /**
    * @param {string} networksDirectoryId
+   * @param {string} nodeId
    * @param {string[]} addresses
    * @param {import('./types.js').Context} context
    */
-  const makePeer = async (networksDirectoryId, addresses, context) => {
-    // TODO race networks that support protocol for connection
-    // TODO retry, exponential back-off, with full jitter
-    // TODO (in connect implementations) allow for the possibility of
-    // connection loss and invalidate the connection formula and its transitive
-    // dependees when this occurs.
-    const networks = await getAllNetworks(networksDirectoryId);
-    // Connect on first support address.
-    for (const address of addresses) {
-      const { protocol } = new URL(address);
-      for (const network of networks) {
-        // eslint-disable-next-line no-await-in-loop
-        if (await E(network).supports(protocol)) {
-          const remoteGateway = E(network).connect(
-            address,
-            makeFarContext(context),
-          );
-          return {
-            /** @param {string} remoteId */
-            provide: remoteId => E(remoteGateway).provide(remoteId),
-          };
+  const makePeer = async (networksDirectoryId, nodeId, addresses, context) => {
+    const remoteControl = provideRemoteControl(nodeId);
+    return remoteControl.connect(
+      async () => {
+        // TODO race networks that support protocol for connection
+        // TODO retry, exponential back-off, with full jitter
+        // TODO (in connect implementations) allow for the possibility of
+        // connection loss and invalidate the connection formula and its transitive
+        // dependees when this occurs.
+        const networks = await getAllNetworks(networksDirectoryId);
+        // Connect on first support address.
+        for (const address of addresses) {
+          const { protocol } = new URL(address);
+          for (const network of networks) {
+            // eslint-disable-next-line no-await-in-loop
+            if (await E(network).supports(protocol)) {
+              const remoteGreeter = E(network).connect(
+                address,
+                makeFarContext(context),
+              );
+              const { cancel, cancelled } = context;
+              return E(remoteGreeter).hello(
+                localNodeId,
+                Promise.resolve(localGateway),
+                cancel,
+                cancelled,
+              );
+            }
+          }
         }
-      }
-    }
-    throw new Error('Cannot connect to peer: no supported addresses');
+        throw new Error('Cannot connect to peer: no supported addresses');
+      },
+      context.cancel,
+      context.cancelled,
+    );
   };
 
   /**
@@ -1561,7 +1779,7 @@ const makeDaemonCore = async (
     makeMailbox,
     makeDirectoryNode,
     getAllNetworkAddresses,
-    ownNodeIdentifier,
+    localNodeId,
   });
 
   /**
@@ -1652,6 +1870,7 @@ const makeDaemonCore = async (
           formula.type,
           formulaNumber,
           harden({
+            NODE: formula.node,
             ADDRESSES: formula.addresses,
           }),
         );
@@ -1678,7 +1897,7 @@ const makeDaemonCore = async (
   return {
     formulateEndoBootstrap,
     provide,
-    nodeIdentifier: ownNodeIdentifier,
+    nodeId: localNodeId,
   };
 };
 
@@ -1708,7 +1927,7 @@ const provideEndoBootstrap = async (
   if (isInitialized) {
     const endoId = formatId({
       number: endoFormulaNumber,
-      node: daemonCore.nodeIdentifier,
+      node: daemonCore.nodeId,
     });
     return /** @type {Promise<import('./types.js').FarEndoBootstrap>} */ (
       daemonCore.provide(endoId)
