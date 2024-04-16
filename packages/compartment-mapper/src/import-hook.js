@@ -1,10 +1,11 @@
 // @ts-check
 
 /** @import {ImportHook} from 'ses' */
+/** @import {ImportNowHook} from 'ses' */
 /** @import {StaticModuleType} from 'ses' */
 /** @import {RedirectStaticModuleInterface} from 'ses' */
 /** @import {ThirdPartyStaticModuleInterface} from 'ses' */
-/** @import {ReadFn} from './types.js' */
+/** @import {DynamicImportHook, ReadFn} from './types.js' */
 /** @import {ReadPowers} from './types.js' */
 /** @import {HashFn} from './types.js' */
 /** @import {Sources} from './types.js' */
@@ -13,6 +14,8 @@
 /** @import {ImportHookMaker} from './types.js' */
 /** @import {DeferredAttenuatorsProvider} from './types.js' */
 /** @import {ExitModuleImportHook} from './types.js' */
+/** @import {SourceMapHook} from './types.js' */
+/** @import {ImportNowHookMaker} from './types.js' */
 
 import { attenuateModuleHook, enforceModulePolicy } from './policy.js';
 import { resolve } from './node-module-specifier.js';
@@ -66,7 +69,7 @@ const nodejsConventionSearchSuffixes = [
 /**
  * @param {object} params
  * @param {Record<string, any>=} params.modules
- * @param {ExitModuleImportHook=} params.exitModuleImportHook
+ * @param {ExitModuleImportHook} [params.exitModuleImportHook]
  * @returns {ExitModuleImportHook|undefined}
  */
 export const exitModuleImportHookMaker = ({
@@ -113,7 +116,7 @@ export const exitModuleImportHookMaker = ({
  * @param {string} options.entryCompartmentName
  * @param {string} options.entryModuleSpecifier
  * @param {ExitModuleImportHook} [options.exitModuleImportHook]
- * @param {import('./types.js').SourceMapHook} [options.sourceMapHook]
+ * @param {SourceMapHook} [options.sourceMapHook]
  * @returns {ImportHookMaker}
  */
 export const makeImportHookMaker = (
@@ -392,3 +395,136 @@ export const makeImportHookMaker = (
   };
   return makeImportHook;
 };
+
+/**
+ * @param {import('@endo/zip').ReadFn|ReadPowers} readPowers
+ * @param {string} baseLocation
+ * @param {object} options
+ * @param {Sources} [options.sources]
+ * @param {Record<string, CompartmentDescriptor>} [options.compartmentDescriptors]
+ * @param {boolean} [options.archiveOnly]
+ * @param {HashFn} [options.computeSha512]
+ * @param {Array<string>} [options.searchSuffixes] - Suffixes to search if the
+ * unmodified specifier is not found.
+ * Pass [] to emulate Node.js’s strict behavior.
+ * The default handles Node.js’s CommonJS behavior.
+ * Unlike Node.js, the Compartment Mapper lifts CommonJS up, more like a
+ * bundler, and does not attempt to vary the behavior of resolution depending
+ * on the language of the importing module.
+ * @param {ExitModuleImportHook} [options.exitModuleImportHook]
+ * @param {SourceMapHook} [options.sourceMapHook]
+ * @param {DynamicImportHook} [options.dynamicHook]
+ * @returns {ImportNowHookMaker}
+ */
+export function makeImportNowHookMaker(
+  readPowers,
+  baseLocation,
+  {
+    sources = Object.create(null),
+    compartmentDescriptors = Object.create(null),
+    archiveOnly = false,
+    computeSha512 = undefined,
+    searchSuffixes = nodejsConventionSearchSuffixes,
+    sourceMapHook = undefined,
+    dynamicHook = undefined,
+    exitModuleImportHook = undefined,
+  },
+) {
+  // Set of specifiers for modules (scoped to compartment) whose parser is not
+  // using heuristics to determine imports.
+  /** @type {Map<string, Set<string>>} compartment name ->* module specifier */
+  const strictlyRequired = new Map();
+
+  /**
+   * @param {string} compartmentName
+   */
+  const strictlyRequiredForCompartment = compartmentName => {
+    let compartmentStrictlyRequired = strictlyRequired.get(compartmentName);
+    if (compartmentStrictlyRequired !== undefined) {
+      return compartmentStrictlyRequired;
+    }
+    compartmentStrictlyRequired = new Set();
+    strictlyRequired.set(compartmentName, compartmentStrictlyRequired);
+    return compartmentStrictlyRequired;
+  };
+
+  const makeImportNowHook = ({
+    packageLocation,
+    packageName: _packageName,
+    attenuators,
+    parse,
+    shouldDeferError,
+    compartments,
+  }) => {
+    packageLocation = resolveLocation(packageLocation, baseLocation);
+    const packageSources = sources[packageLocation] || Object.create(null);
+    sources[packageLocation] = packageSources;
+    const compartmentDescriptor = compartmentDescriptors[packageLocation] || {};
+    const { modules: moduleDescriptors = Object.create(null) } =
+      compartmentDescriptor;
+    compartmentDescriptor.modules = moduleDescriptors;
+
+    /**
+     * @param {string} specifier
+     * @param {Error} error - error to throw on execute
+     * @returns {StaticModuleType}
+     */
+    const deferError = (specifier, error) => {
+      // strictlyRequired is populate
+      if (strictlyRequiredForCompartment(packageLocation).has(specifier)) {
+        throw error;
+      }
+      const record = freeze({
+        imports: [],
+        exports: [],
+        execute: () => {
+          throw error;
+        },
+      });
+      packageSources[specifier] = {
+        deferredError: error.message,
+      };
+
+      return record;
+    };
+
+    /** @type {ImportNowHook} */
+    const importNowHook = moduleSpecifier => {
+      compartmentDescriptor.retained = true;
+
+      // per-module:
+
+      // In Node.js, an absolute specifier always indicates a built-in or
+      // third-party dependency.
+      // The `moduleMapHook` captures all third-party dependencies, unless
+      // we allow importing any exit.
+
+      if (dynamicHook) {
+        const record = dynamicHook(moduleSpecifier, packageLocation);
+        if (record) {
+          // TODO: check for 'dynamic'
+
+          if (archiveOnly) {
+            // Return a place-holder.
+            // Archived compartments are not executed.
+            return freeze({ imports: [], exports: [], execute() {} });
+          }
+
+          // TODO: attenuate module??
+          return record;
+        }
+      }
+
+      return deferError(
+        moduleSpecifier,
+        Error(
+          `Cannot find external module ${q(
+            moduleSpecifier,
+          )} in package ${packageLocation}`,
+        ),
+      );
+    };
+    return importNowHook;
+  };
+  return makeImportNowHook;
+}

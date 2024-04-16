@@ -1,5 +1,6 @@
 // @ts-check
 
+/** @import {ImportNowHook} from 'ses' */
 /** @import {ModuleMapHook} from 'ses' */
 /** @import {ResolveHook} from 'ses' */
 /** @import {ParseFn} from './types.js' */
@@ -334,6 +335,7 @@ export const link = (
   {
     resolve = resolveFallback,
     makeImportHook,
+    makeImportNowHook,
     parserForLanguage,
     globals = {},
     transforms = [],
@@ -403,6 +405,22 @@ export const link = (
       shouldDeferError,
       compartments,
     });
+    /** @type {ImportNowHook | undefined} */
+    let importNowHook;
+    if (
+      makeImportNowHook &&
+      compartmentDescriptors[entryCompartmentName] !== compartmentDescriptor
+    ) {
+      importNowHook = makeImportNowHook({
+        packageLocation: location,
+        packageName: name,
+        // attenuators,
+        parse,
+        // shouldDeferError,
+        compartments,
+      });
+    }
+
     const moduleMapHook = makeModuleMapHook(
       compartmentDescriptor,
       compartments,
@@ -414,6 +432,7 @@ export const link = (
     const compartment = new Compartment(Object.create(null), undefined, {
       resolveHook,
       importHook,
+      importNowHook,
       moduleMapHook,
       transforms,
       __shimTransforms__,

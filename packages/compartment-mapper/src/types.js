@@ -6,6 +6,7 @@ export {};
 /** @typedef {import('ses').FinalStaticModuleType} FinalStaticModuleType */
 /** @typedef {import('ses').ThirdPartyStaticModuleInterface} ThirdPartyStaticModuleInterface */
 /** @typedef {import('ses').ImportHook} ImportHook */
+/** @typedef {import('ses').ImportNowHook} ImportNowHook */
 /** @typedef {import('ses').StaticModuleType} StaticModuleType */
 /** @typedef {import('ses').Transform} Transform */
 
@@ -214,6 +215,20 @@ export {};
  */
 
 /**
+ * @typedef {object} ImportNowHookMakerOptions
+ * @property {string} packageLocation
+ * @property {string} packageName
+ * @property {ParseFn} parse
+ * @property {Record<string, Compartment>} compartments
+ */
+
+/**
+ * @callback ImportNowHookMaker
+ * @param {ImportNowHookMakerOptions} options
+ * @returns {ImportNowHook}
+ */
+
+/**
  * @typedef {object} SourceMapHookDetails
  * @property {string} compartment
  * @property {string} module
@@ -283,6 +298,13 @@ export {};
  */
 
 /**
+ * @callback DynamicImportHook
+ * @param {string} specifier
+ * @param {string} referrer
+ * @returns {ThirdPartyStaticModuleInterface|undefined}
+ */
+
+/**
  * @typedef {object} LoadArchiveOptions
  * @property {string} [expectedSha512]
  * @property {Record<string, any>} [modules]
@@ -311,6 +333,7 @@ export {};
  * @typedef {object} ExtraLinkOptions
  * @property {ResolveHook} [resolve]
  * @property {ImportHookMaker} makeImportHook
+ * @property {ImportNowHookMaker} [makeImportNowHook]
  * @property {ParserForLanguage} parserForLanguage
  * @property {ModuleTransforms} [moduleTransforms]
  * @property {boolean} [archiveOnly]
@@ -385,6 +408,7 @@ export {};
  * @property {Array<string>} [searchSuffixes]
  * @property {Record<string, string>} [commonDependencies]
  * @property {SourceMapHook} [sourceMapHook]
+ * @property {DynamicImportHook} [dynamicHook]
  * @property {Record<string, Language>} [fallbackLanguageForExtension] Additional mapping of file extension to parser
  */
 
@@ -462,8 +486,14 @@ export {};
  */
 
 /**
- * A type representing a property policy, which is a record of string keys and boolean values.
- * @typedef {Record<string, boolean>} PropertyPolicy
+ * A package with this policy will be allowed to be imported dynamically
+ *
+ * @typedef {'dynamic'} DynamicPolicy
+ */
+
+/**
+ * A type representing a property policy, which is a record of string keys and either boolean values or {@link DynamicPolicy}
+ * @typedef {Record<string, boolean | DynamicPolicy>} PropertyPolicy
  */
 
 /**
@@ -552,4 +582,10 @@ export {};
  * @property {CompartmentMapDescriptor} archiveCompartmentMap
  * @property {Sources} archiveSources
  * @property {Record<string, string>} compartmentRenames
+ */
+
+/**
+ * Options for `compartmentMapForNodeModules`
+ *
+ * @typedef {Pick<ArchiveOptions, 'dev' | 'commonDependencies' | 'policy'>} CompartmentMapForNodeModulesOptions
  */

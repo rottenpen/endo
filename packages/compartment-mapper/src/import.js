@@ -1,7 +1,7 @@
 // @ts-check
 /* eslint no-shadow: "off" */
 
-/** @import {Application} from './types.js' */
+/** @import {Application, SomeObject} from './types.js' */
 /** @import {ArchiveOptions} from './types.js' */
 /** @import {ExecuteFn} from './types.js' */
 /** @import {ExecuteOptions} from './types.js' */
@@ -15,6 +15,7 @@ import { link } from './link.js';
 import {
   exitModuleImportHookMaker,
   makeImportHookMaker,
+  makeImportNowHookMaker,
 } from './import-hook.js';
 import parserJson from './parse-json.js';
 import parserText from './parse-text.js';
@@ -47,6 +48,7 @@ export const loadLocation = async (readPowers, moduleLocation, options) => {
     searchSuffixes = undefined,
     commonDependencies = undefined,
     policy,
+    dynamicHook,
   } = options || {};
 
   const { read } = unpackReadPowers(readPowers);
@@ -94,8 +96,20 @@ export const loadLocation = async (readPowers, moduleLocation, options) => {
       entryModuleSpecifier: moduleSpecifier,
       exitModuleImportHook: compartmentExitModuleImportHook,
     });
+
+    const makeImportNowHook = makeImportNowHookMaker(
+      readPowers,
+      packageLocation,
+      {
+        compartmentDescriptors: compartmentMap.compartments,
+        searchSuffixes,
+        archiveOnly: false,
+        dynamicHook,
+      },
+    );
     const { compartment, pendingJobsPromise } = link(compartmentMap, {
       makeImportHook,
+      makeImportNowHook,
       parserForLanguage,
       globals,
       transforms,
@@ -114,10 +128,9 @@ export const loadLocation = async (readPowers, moduleLocation, options) => {
 };
 
 /**
- * @param {ReadFn | ReadPowers} readPowers
  * @param {string} moduleLocation
  * @param {ExecuteOptions & ArchiveOptions} [options]
- * @returns {Promise<import('./types.js').SomeObject>} the object of the imported modules exported
+ * @returns {Promise<SomeObject>} the object of the imported modules exported
  * names.
  */
 export const importLocation = async (

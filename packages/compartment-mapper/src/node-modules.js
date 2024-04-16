@@ -1,7 +1,7 @@
 // @ts-check
 /* eslint no-shadow: 0 */
 
-/** @import {Language} from './types.js' */
+/** @import {Language, CompartmentMapForNodeModulesOptions} from './types.js' */
 /** @import {ReadFn} from './types.js' */
 /** @import {MaybeReadFn} from './types.js' */
 /** @import {CanonicalFn} from './types.js' */
@@ -704,10 +704,7 @@ const translateGraph = (
  * @param {Set<string>} tags
  * @param {object} packageDescriptor
  * @param {string} moduleSpecifier
- * @param {object} [options]
- * @param {boolean} [options.dev]
- * @param {object} [options.commonDependencies]
- * @param {object} [options.policy]
+ * @param {CompartmentMapForNodeModulesOptions} [options]
  * @returns {Promise<CompartmentMapDescriptor>}
  */
 export const compartmentMapForNodeModules = async (
